@@ -61,7 +61,7 @@ func (s *srv) Register(w http.ResponseWriter,r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	log.Printf("User %v successfully registrated", username)
+	log.Printf("User %v successfully registered", username)
 }
 
 func (s *srv) Read(w http.ResponseWriter,r *http.Request) {
@@ -104,8 +104,8 @@ func (s *srv) Read(w http.ResponseWriter,r *http.Request) {
 	}
 }
 
-func NewDB() (*srv, error) {
-	db, err := sql.Open("mysql", "alyona:suntrack@tcp(127.0.0.1:3306)/usersdb")
+func InitDB(dsn string) (*sql.DB, error) {
+	db, err := sql.Open("mysql", dsn)
     if err != nil {
         return nil, fmt.Errorf("failed to connect to database: %v", err)
     }
@@ -117,9 +117,12 @@ func NewDB() (*srv, error) {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS users (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, username VARCHAR(50), password VARCHAR(50) NOT NULL, first_name CHAR(30), last_name CHAR(30), age INTEGER, gender CHAR(1))`); err != nil {
 		return nil, fmt.Errorf("failed to create table: %v", err)
 	}
+	return db, nil
+}
 
+func NewService(db *sql.DB) (*srv) {
 	return &srv{
 		mu: &sync.RWMutex{},
 		db: db,
-	}, nil
+	}
 }
