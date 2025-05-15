@@ -1,23 +1,27 @@
 package service
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+
 	// "io"
-	"net/http"
-	"sync"
 	"log"
+	"net/http"
+
 	_ "github.com/go-sql-driver/mysql"
 )
 
-type srv struct {
-	mu *sync.RWMutex
-	db *sql.DB
-}
+// type srv struct {
+// 	mu *sync.RWMutex
+// 	db *sql.DB
+// }
 
 
 
-func (s *srv) Register(w http.ResponseWriter,r *http.Request) {
+func Register(s *sql.DB) http.HandlerFunc {
+	return func (w http.ResponseWriter,r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -36,11 +40,10 @@ func (s *srv) Register(w http.ResponseWriter,r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+
 
 	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", username).Scan(&count)
+	err := s.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", username).Scan(&count)
 	if err != nil {
 		log.Printf("Database query error: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -53,9 +56,12 @@ func (s *srv) Register(w http.ResponseWriter,r *http.Request) {
 		return
 	}
 
-	_, err = s.db.Exec("INSERT INTO users (username, password, first_name, last_name, age, gender) VALUES (?, ?, ?, ?, ?, ?)", username, password, firstName, lastName, age, gender)
+	passHash := sha256.Sum256([]byte(password))
+	stringHashPass := hex.EncodeToString(passHash[:])
+
+	_, err = s.Exec("INSERT INTO users (username, password, first_name, last_name, age, gender) VALUES (?, ?, ?, ?, ?, ?)", username, stringHashPass, firstName, lastName, age, gender)
 	if err != nil {
-		log.Printf("Database indert query error: %v", err)
+		log.Printf("Database insert query error: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -63,32 +69,28 @@ func (s *srv) Register(w http.ResponseWriter,r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	log.Printf("User %v successfully registered", username)
 }
+}
 
-func (s *srv) Read(w http.ResponseWriter,r *http.Request) {
+func  Read(s *sql.DB) http.HandlerFunc {
+	return func (w http.ResponseWriter,r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
-	username := r.URL.Query().Get("username")
-	password := r.URL.Query().Get("password")
-
-	if username == "" || password == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		log.Printf("Username and password are required")
-		return
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
+		username, _, ok := r.BasicAuth()
+      if !ok {
+          w.WriteHeader(http.StatusBadRequest)
+          return
+      }
 
 	var firstName, lastName, gender string
 	var age int
-	err := s.db.QueryRow("SELECT first_name, last_name, age, gender FROM users WHERE username = ? AND password = ?", username, password).Scan(&firstName, &lastName, &age, &gender)
+	err := s.QueryRow("SELECT first_name, last_name, age, gender FROM users WHERE username = ?", username).Scan(&firstName, &lastName, &age, &gender)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			w.WriteHeader(http.StatusNotFound)
-			log.Printf("User %v not found or password %v is invalid", username, password)
+			log.Printf("User %v not found", username)
 			return
 		}
 		w.WriteHeader(http.StatusInternalServerError)
@@ -96,12 +98,13 @@ func (s *srv) Read(w http.ResponseWriter,r *http.Request) {
 		return
 	}
 
-	res := fmt.Sprintf("%s: %s %s, %d, %s. Pass: %s", username, firstName, lastName, age, gender, password)
+	res := fmt.Sprintf("%s: %s %s, %d, %s", username, firstName, lastName, age, gender)
 	w.WriteHeader(http.StatusOK)
 	_, err = w.Write([]byte(res))
 	if err != nil {
 		log.Printf("Failed to return response: %v", err)
 	}
+}
 }
 
 func InitDB(dsn string) (*sql.DB, error) {
@@ -114,15 +117,15 @@ func InitDB(dsn string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %v", err)
 	}
 
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS users (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, username VARCHAR(50), password VARCHAR(50) NOT NULL, first_name CHAR(30), last_name CHAR(30), age INTEGER, gender CHAR(1))`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS users (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, username VARCHAR(200), password VARCHAR(50) NOT NULL, first_name CHAR(30), last_name CHAR(30), age INTEGER, gender CHAR(1))`); err != nil {
 		return nil, fmt.Errorf("failed to create table: %v", err)
 	}
 	return db, nil
 }
 
-func NewService(db *sql.DB) (*srv) {
-	return &srv{
-		mu: &sync.RWMutex{},
-		db: db,
-	}
-}
+// func NewService(db *sql.DB) (*srv) {
+// 	return &srv{
+// 		mu: &sync.RWMutex{},
+// 		db: db,
+// 	}
+// }

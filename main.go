@@ -4,47 +4,36 @@ import (
 	"crypto/sha256"
     "crypto/subtle"
 	"net/http"
+	"database/sql"
 	"server/service"
 	"fmt"
-	"os"
+	// "os"
 	"log"
 	"time"
+	"encoding/hex"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 type application struct {
-    auth struct {
-        username string
-        password string
-    }
+    db *sql.DB
 }
 
 
 func main() {
-    app := new(application)
-
-    app.auth.username = os.Getenv("AUTH_USERNAME")
-    app.auth.password = os.Getenv("AUTH_PASSWORD")
-
-    if app.auth.username == "" {
-        log.Println("Basic auth username must be provided")
-    }
-
-    if app.auth.password == "" {
-        log.Println("Basic auth password must be provided")
-    }
-
-  
-	mux := http.NewServeMux()
-
+    app := &application{}
 
 	db, err := service.InitDB("alyona:suntrack@tcp(127.0.0.1:3306)/usersdb")
 	if err != nil {
 		fmt.Println(err)
 	}
-	srv := service.NewService(db)
+	app.db = db
 
-	mux.HandleFunc("/register", srv.Register)
-	mux.HandleFunc("/read", srv.Read)
+  
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/register", service.Register(app.db))
+	mux.HandleFunc("/read", app.basicAuth(service.Read(app.db)))
 	
 
 	   srv2 := &http.Server{
@@ -66,33 +55,35 @@ func main() {
 	
 }
 
-func (app *application) protectedHandler(w http.ResponseWriter, r *http.Request) {
-    fmt.Fprintln(w, "This is the protected handler")
-}
 
-func (app *application) unprotectedHandler(w http.ResponseWriter, r *http.Request) {
-    fmt.Fprintln(w, "This is the unprotected handler")
-}
 
 func (app *application) basicAuth(next http.HandlerFunc) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		username, password, ok := r.BasicAuth()
-		if ok {
-			usernameHash := sha256.Sum256([]byte(username))
-			passwordHash := sha256.Sum256([]byte(password))
-			expectedUsernameHash := sha256.Sum256([]byte(app.auth.username))
-			expectedPasswordHash := sha256.Sum256([]byte(app.auth.password))
-
-			usernameMatch := (subtle.ConstantTimeCompare(usernameHash[:], expectedUsernameHash[:]) == 1)
-			passwordMatch := (subtle.ConstantTimeCompare(passwordHash[:], expectedPasswordHash[:]) == 1)
-
-			if usernameMatch && passwordMatch {
-				next.ServeHTTP(w, r)
-				return
-			}
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Basic realm="restricted", charset="UTF-8"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
 
-		w.Header().Set("WWW-Authenticate", `Basic realm="restricted", charset="UTF-8"`)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		var dbPassword string
+		err := app.db.QueryRow("SELECT password FROM users WHERE username = ?", username).Scan(&dbPassword)
+		if err != nil || !checkPassword(password, dbPassword) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="restricted", charset="UTF-8"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		
+				next.ServeHTTP(w, r)
+		
 	})
 } 
+
+func checkPassword(inPassword, dbPassword string) bool {
+	inHash := sha256.Sum256([]byte(inPassword))
+	decodeDBHash, err := hex.DecodeString(dbPassword)
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare(inHash[:], decodeDBHash[:]) == 1
+}
